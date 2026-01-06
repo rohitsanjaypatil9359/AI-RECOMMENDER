@@ -76,6 +76,28 @@ def drop_invalid_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def filter_low_activity_users(df: pd.DataFrame, min_events: int = 3) -> pd.DataFrame:
+    """
+    Filter out users with fewer than min_events interactions.
+    
+    Why this matters:
+    - Cold-start users (< 3 events) will be handled differently in production
+    - Collaborative filtering needs minimum signal to work
+    - Low-activity users contribute noise, not signal
+    
+    Args:
+        df: Events dataframe
+        min_events: Minimum number of events per user (default: 3)
+    
+    Returns:
+        DataFrame with only active users
+    """
+    df = df.copy()
+    user_counts = df["user_id"].value_counts()
+    valid_users = user_counts[user_counts >= min_events].index
+    return df[df["user_id"].isin(valid_users)]
+
+
 if __name__ == "__main__":
     # Quick test
     print("Loading clean events...")
@@ -117,6 +139,27 @@ if __name__ == "__main__":
     clean = drop_invalid_rows(test_events_with_nulls)
     print(f"\nAfter dropping invalid rows: {len(clean)} rows")
     print(clean)
+    
+    # Test low-activity user filtering
+    print("\n\nTesting low-activity user filtering...")
+    test_events_users = pd.DataFrame({
+        "user_id": ["user1", "user1", "user1", "user2", "user2", "user3"],
+        "item_id": ["item1", "item2", "item3", "item4", "item5", "item6"],
+        "event_type": ["purchase"] * 6,
+        "timestamp": pd.date_range("2020-01-01", periods=6)
+    })
+    
+    print(f"\nBefore filtering: {len(test_events_users)} rows")
+    print("User activity:")
+    print(test_events_users["user_id"].value_counts().sort_index())
+    print("  - user1: 3 events")
+    print("  - user2: 2 events (< 3, will be filtered)")
+    print("  - user3: 1 event (< 3, will be filtered)")
+    
+    filtered = filter_low_activity_users(test_events_users, min_events=3)
+    print(f"\nAfter filtering (min_events=3): {len(filtered)} rows")
+    print("Remaining users:")
+    print(filtered["user_id"].value_counts().sort_index())
     
     print("\n\nFirst few real events:")
     print(events.head())
