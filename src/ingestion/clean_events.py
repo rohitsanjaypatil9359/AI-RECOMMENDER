@@ -8,6 +8,9 @@ that becomes the single source of truth for all downstream models.
 import pandas as pd
 from pathlib import Path
 from datetime import datetime
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from features import load_events, clean_events as clean_events_util
 
 
 def load_raw_events(path: str) -> pd.DataFrame:
@@ -207,11 +210,30 @@ def clean_events(input_path: str, output_path: str) -> dict:
 
 
 def main():
-    """Run the cleaning pipeline."""
+    """Run the cleaning pipeline using utilities from src/features."""
     raw_path = "data/processed/events_raw.csv"
     clean_path = "data/processed/events.csv"
     
-    clean_events(raw_path, clean_path)
+    # Load raw events
+    df = load_events(raw_path)
+    
+    # Apply complete cleaning pipeline
+    cleaned_df = clean_events_util(df)
+    
+    # Save cleaned events
+    cleaned_df.to_csv(clean_path, index=False)
+    
+    print("\n" + "="*60)
+    print("PIPELINE COMPLETE")
+    print("="*60)
+    print(f"Raw events:     {len(df):,}")
+    print(f"Clean events:   {len(cleaned_df):,}")
+    print(f"Reduction:      {100 * (1 - len(cleaned_df)/len(df)):.1f}%")
+    print(f"\nSaved to: {clean_path}")
+    print("\nFirst 5 clean events:")
+    print(cleaned_df.head())
+    print("\nEvent type distribution:")
+    print(cleaned_df["event_type"].value_counts())
 
 
 if __name__ == "__main__":
