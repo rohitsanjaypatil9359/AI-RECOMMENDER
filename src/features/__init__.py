@@ -98,6 +98,74 @@ def filter_low_activity_users(df: pd.DataFrame, min_events: int = 3) -> pd.DataF
     return df[df["user_id"].isin(valid_users)]
 
 
+def filter_rare_items(df: pd.DataFrame, min_events: int = 5) -> pd.DataFrame:
+    """
+    Filter out items with fewer than min_events interactions.
+    
+    Why this rule exists:
+    - Reduces noise: Items with 1-2 interactions are data noise
+    - Improves model stability: Models work better with more signal
+    - Mirrors real-world production: E-commerce platforms filter rare SKUs
+    - Cold-start items: New items handled separately (content-based fallback)
+    
+    Args:
+        df: Events dataframe
+        min_events: Minimum number of events per item (default: 5)
+    
+    Returns:
+        DataFrame with only sufficiently popular items
+    """
+    df = df.copy()
+    item_counts = df["item_id"].value_counts()
+    valid_items = item_counts[item_counts >= min_events].index
+    return df[df["item_id"].isin(valid_items)]
+
+
+def sort_by_time(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Sort events chronologically by timestamp.
+    
+    Non-negotiable for recommender systems:
+    - Time-awareness enables temporal evaluation splits (train/test by date)
+    - Prevents data leakage (future events bleeding into past)
+    - Supports session-based recommendations
+    - Enables next-item prediction (temporal dynamics)
+    - Required for A/B testing validation
+    
+    Args:
+        df: Events dataframe
+    
+    Returns:
+        DataFrame sorted by timestamp with reset index
+    """
+    return df.sort_values("timestamp").reset_index(drop=True)
+
+
+def clean_events(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Complete event cleaning pipeline.
+    
+    Composes all cleaning utilities into a single, reproducible process:
+    1. Normalize event types (case/whitespace)
+    2. Drop invalid rows (missing critical fields)
+    3. Filter low-activity users (< 3 events → cold-start)
+    4. Filter rare items (< 5 events → noisy)
+    5. Sort by time (non-negotiable for temporal splits)
+    
+    Args:
+        df: Raw events dataframe
+    
+    Returns:
+        Clean, production-ready events dataframe
+    """
+    df = normalize_event_types(df)
+    df = drop_invalid_rows(df)
+    df = filter_low_activity_users(df, min_events=3)
+    df = filter_rare_items(df, min_events=5)
+    df = sort_by_time(df)
+    return df
+
+
 if __name__ == "__main__":
     # Quick test
     print("Loading clean events...")
@@ -161,5 +229,88 @@ if __name__ == "__main__":
     print("Remaining users:")
     print(filtered["user_id"].value_counts().sort_index())
     
-    print("\n\nFirst few real events:")
+    # Test rare item filtering
+    print("\n\nTesting rare item filtering...")
+    test_events_items = pd.DataFrame({
+        "user_id": ["user1", "user2", "user3", "user4", "user5", "user6"],
+        "item_id": ["item1", "item1", "item1", "item1", "item1", "item2"],
+        "event_type": ["purchase"] * 6,
+        "timestamp": pd.date_range("2020-01-01", periods=6)
+    })
+    
+    print(f"\nBefore filtering: {len(test_events_items)} rows")
+    print("Item activity:")
+    print(test_events_items["item_id"].value_counts().sort_index())
+    print("  - item1: 5 events")
+    print("  - item2: 1 event (< 5, will be filtered)")
+    
+    filtered_items = filter_rare_items(test_events_items, min_events=5)
+    print(f"\nAfter filtering (min_events=5): {len(filtered_items)} rows")
+    print("Remaining items:")
+    print(filtered_items["item_id"].value_counts().sort_index())
+    
+    # Test temporal sorting
+    print("\n\nTesting temporal sorting...")
+    test_events_time = pd.DataFrame({
+        "user_id": ["user1", "user2", "user3", "user4"],
+        "item_id": ["item1", "item2", "item3", "item4"],
+        "event_type": ["purchase"] * 4,
+        "timestamp": [
+            pd.Timestamp("2020-01-05"),  # Out of order
+            pd.Timestamp("2020-01-02"),  # Out of order
+            pd.Timestamp("2020-01-01"),  # Out of order
+            pd.Timestamp("2020-01-03"),  # Out of order
+        ]
+    })
+    
+    print(f"\nBefore sorting:")
+    print(test_events_time[["timestamp", "user_id"]])
+    
+    sorted_time = sort_by_time(test_events_time)
+    print(f"\nAfter sorting by timestamp:")
+    print(sorted_time[["timestamp", "user_id"]])
+    is_sorted = (sorted_time["timestamp"].diff().dropna() >= pd.Timedelta(0)).all()
+    print("\nTimestamps in chronological order:", is_sorted)
+    
+    # Test complete pipeline
+    print("\n\n" + "="*60)
+    print("Testing complete clean_events() pipeline")
+    print("="*60)
+    
+    test_full_pipeline = pd.DataFrame({
+        "user_id": ["user1", "user1", "user1", "user2", "user2", "user3", "user4", "user4"],
+        "item_id": ["item1", "item1", "item2", "item3", "item3", "item4", "item5", "item6"],
+        "event_type": ["Purchase", "purchase ", " PURCHASE", "purchase", "PURCHASE", "purchase", "purchase", "purchase"],
+        "timestamp": [
+            pd.Timestamp("2020-01-05"),
+            pd.Timestamp("2020-01-02"),
+            pd.Timestamp("2020-01-01"),
+            pd.Timestamp("2020-01-03"),
+            pd.Timestamp("2020-01-04"),
+            pd.Timestamp("2020-01-06"),
+            pd.Timestamp("2020-01-07"),
+            pd.Timestamp("2020-01-08"),
+        ]
+    })
+    
+    print(f"\nBefore pipeline: {len(test_full_pipeline)} rows")
+    print("Users:", test_full_pipeline["user_id"].unique())
+    print("Items:", test_full_pipeline["item_id"].unique())
+    
+    cleaned = clean_events(test_full_pipeline)
+    
+    print(f"\nAfter pipeline: {len(cleaned)} rows")
+    print("Users:", cleaned["user_id"].unique())
+    print("Items:", cleaned["item_id"].unique())
+    print("\nWhy rows were removed:")
+    print("  - user2: only 2 events (< 3 min_events)")
+    print("  - user3: only 1 event (< 3 min_events)")
+    print("  - item4: only 1 event (< 5 min_events)")
+    print("  - item5: only 1 event (< 5 min_events)")
+    print("  - item6: only 1 event (< 5 min_events)")
+    
+    print(f"\nFinal dataset:")
+    print(cleaned)
+    
+    print("\n\nFirst few real events (already sorted):")
     print(events.head())
